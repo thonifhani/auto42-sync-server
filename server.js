@@ -5,20 +5,19 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 /**
- * MEMORY INVENTORY STORE
- * (temporary storage - no database)
+ * MEMORY STORE
  */
 let inventory = [];
 
 /**
- * HEALTH CHECK
+ * HEALTH
  */
 app.get("/", (req, res) => {
-    res.send("Auto42 Sync Server LIVE (CLEAN MODE)");
+    res.send("Auto42 Sync Server LIVE (IMAGE FIX MODE)");
 });
 
 /**
- * GET INVENTORY
+ * INVENTORY API
  */
 app.get("/inventory", (req, res) => {
     res.json({
@@ -29,47 +28,26 @@ app.get("/inventory", (req, res) => {
 });
 
 /**
- * WEBHOOK RECEIVER (WORDPRESS → NODE)
+ * WEBHOOK
  */
 app.post("/webhook", (req, res) => {
 
     const data = req.body;
 
-    // BASIC VALIDATION
     if (!data || !data.id) {
-        return res.status(400).json({
-            success: false,
-            error: "Invalid payload - missing ID"
-        });
+        return res.status(400).json({ error: "invalid payload" });
     }
 
-    console.log("\n==============================");
-    console.log("🔥 WEBHOOK RECEIVED");
-    console.log("==============================");
-
-    console.log("EVENT:", data.event || "unknown");
+    console.log("\n====================");
+    console.log("WEBHOOK EVENT:", data.event);
     console.log("ID:", data.id);
-    console.log("TITLE:", data.title || "no title");
+    console.log("TITLE:", data.title);
+    console.log("====================\n");
 
-    console.log("FEATURED IMAGE:", data.featured_image || "missing");
-
-    if (Array.isArray(data.gallery)) {
-        console.log("GALLERY COUNT:", data.gallery.length);
-    } else {
-        console.log("GALLERY: empty or invalid");
-    }
-
-    console.log("==============================\n");
-
-    /**
-     * UPSERT (CREATE / UPDATE)
-     */
     if (data.event === "upsert") {
 
-        // remove duplicates
-        inventory = inventory.filter(item => item.id !== data.id);
+        inventory = inventory.filter(v => v.id !== data.id);
 
-        // insert fresh record
         inventory.push({
             id: data.id,
             title: data.title || "",
@@ -79,36 +57,29 @@ app.post("/webhook", (req, res) => {
             make: data.make || "",
             model: data.model || "",
 
-            fuel: data.fuel || "",
-            transmission: data.transmission || "",
-            body: data.body || "",
+            featured_image:
+                data.featured_image ||
+                "https://via.placeholder.com/800x600?text=No+Image",
 
-            featured_image: data.featured_image || null,
-            gallery: Array.isArray(data.gallery) ? data.gallery : [],
+            gallery: Array.isArray(data.gallery)
+                ? data.gallery.filter(img => typeof img === "string" && img.length > 0)
+                : ["https://via.placeholder.com/800x600?text=No+Gallery"],
 
-            status: data.status || "publish",
             updated_at: new Date().toISOString()
         });
 
-        console.log("✅ UPSERT SUCCESS:", data.id);
+        console.log("UPSERT OK:", data.id);
     }
 
-    /**
-     * DELETE
-     */
     if (data.event === "delete") {
 
-        inventory = inventory.filter(item => item.id !== data.id);
+        inventory = inventory.filter(v => v.id !== data.id);
 
-        console.log("🗑 DELETE SUCCESS:", data.id);
+        console.log("DELETE OK:", data.id);
     }
 
-    /**
-     * RESPONSE
-     */
     res.json({
         success: true,
-        received: true,
         total: inventory.length
     });
 });
