@@ -5,72 +5,58 @@ const app = express();
 app.use(express.json());
 
 /**
- * ROOT CHECK
+ * SIMPLE MEMORY STORAGE
+ */
+let inventory = [];
+
+/**
+ * HEALTH CHECK
  */
 app.get("/", (req, res) => {
-    res.send("Auto42 Sync Server LIVE");
+    res.send("Auto42 Sync Server LIVE (NO DB MODE)");
 });
 
 /**
- * SIMPLE INVENTORY CHECK (optional debug)
+ * GET INVENTORY (LIVE MEMORY)
  */
 app.get("/inventory", (req, res) => {
     res.json({
-        status: "inventory endpoint active"
+        success: true,
+        total: inventory.length,
+        data: inventory
     });
 });
 
 /**
- * WEBHOOK RECEIVER (FULL LOGGING + MEDIA DEBUG)
+ * WEBHOOK RECEIVER
  */
 app.post("/webhook", (req, res) => {
 
     const data = req.body;
 
-    console.log("\n====================================");
-    console.log("🔥 FULL VEHICLE + MEDIA PAYLOAD");
-    console.log("====================================\n");
+    console.log("EVENT:", data.event, "ID:", data.id);
 
-    console.log(JSON.stringify(data, null, 2));
+    if (data.event === "upsert") {
 
-    console.log("\n---------- CORE FIELDS ----------");
-    console.log("ID:", data.id || "MISSING");
-    console.log("TITLE:", data.title || "MISSING");
-    console.log("STATUS:", data.status || "MISSING");
-    console.log("PRICE:", data.price || "MISSING");
-    console.log("MILEAGE:", data.mileage || "MISSING");
-    console.log("YEAR:", data.year || "MISSING");
-    console.log("MAKE:", data.make || "MISSING");
-    console.log("MODEL:", data.model || "MISSING");
+        // remove duplicates
+        inventory = inventory.filter(v => v.id !== data.id);
 
-    console.log("\n---------- MEDIA ----------");
+        // add updated record
+        inventory.push(data);
 
-    // FEATURED IMAGE
-    if (data.featured_image) {
-        console.log("FEATURED IMAGE:", data.featured_image);
-    } else {
-        console.log("FEATURED IMAGE: NOT FOUND");
+        console.log("UPSERT DONE:", data.id);
     }
 
-    // GALLERY
-    if (Array.isArray(data.gallery) && data.gallery.length > 0) {
+    if (data.event === "delete") {
 
-        console.log("GALLERY COUNT:", data.gallery.length);
+        inventory = inventory.filter(v => v.id !== data.id);
 
-        data.gallery.forEach((img, index) => {
-            console.log(`GALLERY [${index + 1}]`, img);
-        });
-
-    } else {
-        console.log("GALLERY: EMPTY OR INVALID");
+        console.log("DELETE DONE:", data.id);
     }
-
-    console.log("\n====================================\n");
 
     res.json({
         success: true,
-        received: true,
-        id: data.id || null
+        total: inventory.length
     });
 });
 
@@ -80,5 +66,5 @@ app.post("/webhook", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log("🚀 Server running on port", PORT);
 });
