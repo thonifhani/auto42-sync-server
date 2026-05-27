@@ -1,117 +1,123 @@
-<?php
-/**
- * Auto42 Core Sync (Stable Version)
- */
+const express = require("express");
 
-if (!defined('ABSPATH')) exit;
+const app = express();
 
-/**
- * FEATURED IMAGE
- */
-function auto42_get_featured_image($post_id) {
-    $thumb_id = get_post_thumbnail_id($post_id);
-    if (!$thumb_id) return null;
-    return wp_get_attachment_url($thumb_id);
-}
+app.use(express.json({ limit: "10mb" }));
 
 /**
- * GALLERY (Motors + fallback safe mode)
- * (:contentReference[oaicite:0]{index=0})
+ * MEMORY INVENTORY STORE
+ * (temporary storage - no database)
  */
-function auto42_get_gallery_images($post_id) {
+let inventory = [];
 
-    $images = [];
+/**
+ * HEALTH CHECK
+ */
+app.get("/", (req, res) => {
+    res.send("Auto42 Sync Server LIVE (CLEAN MODE)");
+});
 
-    // Method 1: Motors meta gallery
-    $gallery = get_post_meta($post_id, 'gallery', true);
+/**
+ * GET INVENTORY
+ */
+app.get("/inventory", (req, res) => {
+    res.json({
+        success: true,
+        total: inventory.length,
+        data: inventory
+    });
+});
 
-    if (!empty($gallery)) {
-        $ids = explode(',', $gallery);
+/**
+ * WEBHOOK RECEIVER (WORDPRESS → NODE)
+ */
+app.post("/webhook", (req, res) => {
 
-        foreach ($ids as $id) {
-            $url = wp_get_attachment_url($id);
-            if ($url) $images[] = $url;
-        }
+    const data = req.body;
+
+    // BASIC VALIDATION
+    if (!data || !data.id) {
+        return res.status(400).json({
+            success: false,
+            error: "Invalid payload - missing ID"
+        });
     }
 
-    // Method 2: fallback to all attached media
-    if (empty($images)) {
-        $attachments = get_attached_media('image', $post_id);
+    console.log("\n==============================");
+    console.log("🔥 WEBHOOK RECEIVED");
+    console.log("==============================");
 
-        foreach ($attachments as $img) {
-            $images[] = wp_get_attachment_url($img->ID);
-        }
+    console.log("EVENT:", data.event || "unknown");
+    console.log("ID:", data.id);
+    console.log("TITLE:", data.title || "no title");
+
+    console.log("FEATURED IMAGE:", data.featured_image || "missing");
+
+    if (Array.isArray(data.gallery)) {
+        console.log("GALLERY COUNT:", data.gallery.length);
+    } else {
+        console.log("GALLERY: empty or invalid");
     }
 
-    return array_values(array_unique($images));
-}
+    console.log("==============================\n");
+
+    /**
+     * UPSERT (CREATE / UPDATE)
+     */
+    if (data.event === "upsert") {
+
+        // remove duplicates
+        inventory = inventory.filter(item => item.id !== data.id);
+
+        // insert fresh record
+        inventory.push({
+            id: data.id,
+            title: data.title || "",
+            price: data.price || "",
+            mileage: data.mileage || "",
+            year: data.year || "",
+            make: data.make || "",
+            model: data.model || "",
+
+            fuel: data.fuel || "",
+            transmission: data.transmission || "",
+            body: data.body || "",
+
+            featured_image: data.featured_image || null,
+            gallery: Array.isArray(data.gallery) ? data.gallery : [],
+
+            status: data.status || "publish",
+            updated_at: new Date().toISOString()
+        });
+
+        console.log("✅ UPSERT SUCCESS:", data.id);
+    }
+
+    /**
+     * DELETE
+     */
+    if (data.event === "delete") {
+
+        inventory = inventory.filter(item => item.id !== data.id);
+
+        console.log("🗑 DELETE SUCCESS:", data.id);
+    }
+
+    /**
+     * RESPONSE
+     */
+    res.json({
+        success: true,
+        received: true,
+        total: inventory.length
+    });
+});
 
 /**
- * BUILD PAYLOAD
+ * START SERVER
  */
-function auto42_build_payload($post_id, $post) {
+const PORT = process.env.PORT || 3000;
 
-    return [
-        'event' => 'upsert',
-        'id' => $post_id,
-        'title' => $post->post_title,
-        'status' => $post->post_status,
-
-        // VEHICLE DATA
-        'price' => get_post_meta($post_id, 'stm_car_price', true),
-        'mileage' => get_post_meta($post_id, 'stm_car_mileage', true),
-        'year' => get_post_meta($post_id, 'stm_car_year', true),
-        'make' => get_post_meta($post_id, 'stm_car_make', true),
-        'model' => get_post_meta($post_id, 'stm_car_model', true),
-
-        // MEDIA
-        'featured_image' => auto42_get_featured_image($post_id),
-        'gallery' => auto42_get_gallery_images($post_id)
-    ];
-}
-
-/**
- * WEBHOOK TRIGGER
- */
-function auto42_sync_trigger($post_id, $post) {
-
-    if ($post->post_type !== 'listings') return;
-    if (wp_is_post_autosave($post_id)) return;
-    if (wp_is_post_revision($post_id)) return;
-
-    $payload = auto42_build_payload($post_id, $post);
-
-    wp_remote_post('https://auto42-sync-server.onrender.com/webhook', [
-        'method' => 'POST',
-        'headers' => [
-            'Content-Type' => 'application/json'
-        ],
-        'body' => json_encode($payload),
-        'timeout' => 10
-    ]);
-}
-
-add_action('save_post', 'auto42_sync_trigger', 10, 2);
-
-/**
- * DELETE SYNC
- */
-function auto42_delete_sync($post_id) {
-
-    $post = get_post($post_id);
-    if (!$post || $post->post_type !== 'listings') return;
-
-    wp_remote_post('https://auto42-sync-server.onrender.com/webhook', [
-        'method' => 'POST',
-        'headers' => [
-            'Content-Type' => 'application/json'
-        ],
-        'body' => json_encode([
-            'event' => 'delete',
-            'id' => $post_id
-        ]),
-        'timeout' => 10
-    ]);
-}
-
-add_action('before_delete_post', 'auto42_delete_sync');
+app.listen(PORT, () => {
+    console.log("🚀 Auto42 Server Running on port", PORT);
+});
