@@ -13,37 +13,69 @@ app.get("/", (req, res) => {
 });
 
 /**
- * INVENTORY (REAL DATA - NO DEMO STORAGE)
- * Pulls directly from WordPress Motors listing API
+ * INVENTORY (REAL WORDPRESS DATA ONLY)
+ * Motors CPT: listings
  */
 app.get("/inventory", async (req, res) => {
+
     try {
 
-        const response = await axios.get(
-            "https://auto42.co.za/wp-json/wp/v2/listing?per_page=20&_embed=1"
+        // GET LISTINGS
+        const listingsRes = await axios.get(
+            "https://auto42.co.za/wp-json/wp/v2/listings?per_page=20&_embed=1"
         );
 
-        const listings = response.data.map(wp => ({
-            id: wp.id,
-            title: wp.title?.rendered || "",
-            slug: wp.slug || "",
-            link: wp.link || "",
-            status: wp.status || "",
+        const listings = listingsRes.data;
 
-            image:
-                wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
+        const result = await Promise.all(listings.map(async (wp) => {
 
-            price: wp.meta?.stm_car_price || null,
-            mileage: wp.meta?.stm_car_mileage || null,
+            // FEATURE IMAGE
+            let image =
+                wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null;
 
-            updated_at: wp.modified || null
+            // GALLERY (MEDIA ATTACHMENTS)
+            let gallery = [];
+
+            try {
+                const mediaRes = await axios.get(
+                    `https://auto42.co.za/wp-json/wp/v2/media?parent=${wp.id}`
+                );
+
+                gallery = mediaRes.data.map(m => m.source_url);
+
+            } catch (e) {
+                // ignore gallery errors
+            }
+
+            return {
+                id: wp.id,
+                title: wp.title?.rendered || "",
+                slug: wp.slug || "",
+                link: wp.link || "",
+                status: wp.status || "",
+
+                image,
+                gallery,
+
+                // NOTE: Motors meta NOT exposed in REST API
+                price: null,
+                mileage: null,
+                year: null,
+                make: null,
+                model: null,
+
+                updated_at: wp.modified || null
+            };
         }));
 
-        res.json(listings);
+        res.json(result);
 
     } catch (err) {
         console.log("INVENTORY ERROR:", err.message);
-        res.status(500).json({ error: "failed to load inventory" });
+
+        res.status(500).json({
+            error: "failed to load inventory"
+        });
     }
 });
 
@@ -57,28 +89,42 @@ app.post("/webhook", async (req, res) => {
         const id = req.body.id;
 
         if (!id) {
-            return res.status(400).json({ error: "missing listing id" });
+            return res.status(400).json({ error: "missing id" });
         }
 
-        // FETCH FULL LISTING FROM WORDPRESS
+        // GET SINGLE LISTING
         const wpRes = await axios.get(
-            `https://auto42.co.za/wp-json/wp/v2/listing/${id}?_embed=1`
+            `https://auto42.co.za/wp-json/wp/v2/listings/${id}?_embed=1`
         );
 
         const wp = wpRes.data;
+
+        let image =
+            wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null;
+
+        let gallery = [];
+
+        try {
+            const mediaRes = await axios.get(
+                `https://auto42.co.za/wp-json/wp/v2/media?parent=${id}`
+            );
+
+            gallery = mediaRes.data.map(m => m.source_url);
+
+        } catch (e) {}
 
         const vehicle = {
             id: wp.id,
             title: wp.title?.rendered || "",
             slug: wp.slug || "",
             link: wp.link || "",
-            status: wp.status || "",
 
-            image:
-                wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
+            image,
+            gallery,
 
-            price: wp.meta?.stm_car_price || null,
-            mileage: wp.meta?.stm_car_mileage || null,
+            price: null,
+            mileage: null,
+            year: null,
 
             synced_at: new Date()
         };
