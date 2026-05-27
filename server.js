@@ -1,70 +1,117 @@
-const express = require("express");
+<?php
+/**
+ * Auto42 Core Sync (Stable Version)
+ */
 
-const app = express();
-
-app.use(express.json());
+if (!defined('ABSPATH')) exit;
 
 /**
- * SIMPLE MEMORY STORAGE
+ * FEATURED IMAGE
  */
-let inventory = [];
+function auto42_get_featured_image($post_id) {
+    $thumb_id = get_post_thumbnail_id($post_id);
+    if (!$thumb_id) return null;
+    return wp_get_attachment_url($thumb_id);
+}
 
 /**
- * HEALTH CHECK
+ * GALLERY (Motors + fallback safe mode)
+ * (:contentReference[oaicite:0]{index=0})
  */
-app.get("/", (req, res) => {
-    res.send("Auto42 Sync Server LIVE (NO DB MODE)");
-});
+function auto42_get_gallery_images($post_id) {
 
-/**
- * GET INVENTORY (LIVE MEMORY)
- */
-app.get("/inventory", (req, res) => {
-    res.json({
-        success: true,
-        total: inventory.length,
-        data: inventory
-    });
-});
+    $images = [];
 
-/**
- * WEBHOOK RECEIVER
- */
-app.post("/webhook", (req, res) => {
+    // Method 1: Motors meta gallery
+    $gallery = get_post_meta($post_id, 'gallery', true);
 
-    const data = req.body;
+    if (!empty($gallery)) {
+        $ids = explode(',', $gallery);
 
-    console.log("EVENT:", data.event, "ID:", data.id);
-
-    if (data.event === "upsert") {
-
-        // remove duplicates
-        inventory = inventory.filter(v => v.id !== data.id);
-
-        // add updated record
-        inventory.push(data);
-
-        console.log("UPSERT DONE:", data.id);
+        foreach ($ids as $id) {
+            $url = wp_get_attachment_url($id);
+            if ($url) $images[] = $url;
+        }
     }
 
-    if (data.event === "delete") {
+    // Method 2: fallback to all attached media
+    if (empty($images)) {
+        $attachments = get_attached_media('image', $post_id);
 
-        inventory = inventory.filter(v => v.id !== data.id);
-
-        console.log("DELETE DONE:", data.id);
+        foreach ($attachments as $img) {
+            $images[] = wp_get_attachment_url($img->ID);
+        }
     }
 
-    res.json({
-        success: true,
-        total: inventory.length
-    });
-});
+    return array_values(array_unique($images));
+}
 
 /**
- * START SERVER
+ * BUILD PAYLOAD
  */
-const PORT = process.env.PORT || 3000;
+function auto42_build_payload($post_id, $post) {
 
-app.listen(PORT, () => {
-    console.log("🚀 Server running on port", PORT);
-});
+    return [
+        'event' => 'upsert',
+        'id' => $post_id,
+        'title' => $post->post_title,
+        'status' => $post->post_status,
+
+        // VEHICLE DATA
+        'price' => get_post_meta($post_id, 'stm_car_price', true),
+        'mileage' => get_post_meta($post_id, 'stm_car_mileage', true),
+        'year' => get_post_meta($post_id, 'stm_car_year', true),
+        'make' => get_post_meta($post_id, 'stm_car_make', true),
+        'model' => get_post_meta($post_id, 'stm_car_model', true),
+
+        // MEDIA
+        'featured_image' => auto42_get_featured_image($post_id),
+        'gallery' => auto42_get_gallery_images($post_id)
+    ];
+}
+
+/**
+ * WEBHOOK TRIGGER
+ */
+function auto42_sync_trigger($post_id, $post) {
+
+    if ($post->post_type !== 'listings') return;
+    if (wp_is_post_autosave($post_id)) return;
+    if (wp_is_post_revision($post_id)) return;
+
+    $payload = auto42_build_payload($post_id, $post);
+
+    wp_remote_post('https://auto42-sync-server.onrender.com/webhook', [
+        'method' => 'POST',
+        'headers' => [
+            'Content-Type' => 'application/json'
+        ],
+        'body' => json_encode($payload),
+        'timeout' => 10
+    ]);
+}
+
+add_action('save_post', 'auto42_sync_trigger', 10, 2);
+
+/**
+ * DELETE SYNC
+ */
+function auto42_delete_sync($post_id) {
+
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== 'listings') return;
+
+    wp_remote_post('https://auto42-sync-server.onrender.com/webhook', [
+        'method' => 'POST',
+        'headers' => [
+            'Content-Type' => 'application/json'
+        ],
+        'body' => json_encode([
+            'event' => 'delete',
+            'id' => $post_id
+        ]),
+        'timeout' => 10
+    ]);
+}
+
+add_action('before_delete_post', 'auto42_delete_sync');
