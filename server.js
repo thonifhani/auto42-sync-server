@@ -1,80 +1,58 @@
 const express = require("express");
-const axios = require("axios");
 
 const app = express();
 
 app.use(express.json());
 
 /**
- * ROOT TEST
+ * ROOT CHECK
  */
 app.get("/", (req, res) => {
     res.send("Auto42 Sync Server LIVE");
 });
 
 /**
- * INVENTORY TEST
- * (Safe basic version)
+ * INVENTORY TEST (OPTIONAL SAFE VIEW)
  */
-app.get("/inventory", async (req, res) => {
-
-    try {
-
-        const response = await axios.get(
-            "https://auto42.co.za/wp-json/wp/v2/listings?per_page=5"
-        );
-
-        const listings = response.data;
-
-        const clean = listings.map(item => ({
-            id: item.id,
-            title: item.title?.rendered || "",
-            slug: item.slug || "",
-            link: item.link || "",
-            status: item.status || "",
-            modified: item.modified || ""
-        }));
-
-        res.json({
-            success: true,
-            total: clean.length,
-            listings: clean
-        });
-
-    } catch (err) {
-
-        console.log("INVENTORY ERROR:");
-        console.log(err.message);
-
-        res.status(500).json({
-            error: "failed to load inventory"
-        });
-    }
+app.get("/inventory", (req, res) => {
+    res.json({
+        status: "inventory endpoint active"
+    });
 });
 
 /**
- * REAL-TIME WEBHOOK RECEIVER
+ * WEBHOOK RECEIVER (FULL LOGGING MODE)
  */
 app.post("/webhook", (req, res) => {
 
     const data = req.body;
 
-    console.log("=================================");
-    console.log("EVENT RECEIVED:");
-    console.log(data);
-    console.log("=================================");
+    console.log("\n====================================");
+    console.log("🔥 FULL VEHICLE PAYLOAD RECEIVED");
+    console.log("====================================\n");
+
+    console.log(JSON.stringify(data, null, 2));
+
+    console.log("\n====================================");
 
     if (data.event === "upsert") {
-        console.log("UPSERT LISTING:", data.id);
+        console.log("🟢 UPSERT VEHICLE ID:", data.id);
+        console.log("TITLE:", data.title || "N/A");
+        console.log("PRICE:", data.price || "N/A");
+        console.log("MILEAGE:", data.mileage || "N/A");
+        console.log("YEAR:", data.year || "N/A");
+        console.log("MAKE:", data.make || "N/A");
+        console.log("MODEL:", data.model || "N/A");
     }
 
     if (data.event === "delete") {
-        console.log("DELETE LISTING:", data.id);
+        console.log("🔴 DELETE VEHICLE ID:", data.id);
     }
 
     res.json({
         success: true,
-        received: data
+        received: true,
+        id: data.id || null
     });
 });
 
