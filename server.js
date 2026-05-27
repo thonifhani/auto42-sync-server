@@ -5,44 +5,26 @@ const app = express();
 
 app.use(express.json());
 
-// LOCAL MEMORY STORAGE
-const listings = [];
-
-// HEALTH CHECK
+/**
+ * HEALTH CHECK
+ */
 app.get("/", (req, res) => {
     res.send("Auto42 Sync Server LIVE");
 });
 
-// VIEW STORED LISTINGS
-app.get("/inventory", (req, res) => {
-    res.json(listings);
-});
-
-// WEBHOOK RECEIVER
-app.post("/webhook", async (req, res) => {
-
+/**
+ * INVENTORY (REAL DATA - NO DEMO STORAGE)
+ * Pulls directly from WordPress Motors listing API
+ */
+app.get("/inventory", async (req, res) => {
     try {
 
-        console.log("🔥 Webhook received");
-
-        const payload = req.body;
-
-        if (!payload.id) {
-            return res.status(400).json({
-                error: "missing listing id"
-            });
-        }
-
-        // FETCH FULL LISTING
-        const api = await axios.get(
-            `https://auto42.co.za/wp-json/wp/v2/listing/${payload.id}?_embed=1`
+        const response = await axios.get(
+            "https://auto42.co.za/wp-json/wp/v2/listing?per_page=20&_embed=1"
         );
 
-        const wp = api.data;
-
-        // NORMALIZE
-        const vehicle = {
-            external_id: wp.id,
+        const listings = response.data.map(wp => ({
+            id: wp.id,
             title: wp.title?.rendered || "",
             slug: wp.slug || "",
             link: wp.link || "",
@@ -51,22 +33,57 @@ app.post("/webhook", async (req, res) => {
             image:
                 wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
 
-            updated: new Date()
-        };
+            price: wp.meta?.stm_car_price || null,
+            mileage: wp.meta?.stm_car_mileage || null,
 
-        // REMOVE OLD VERSION
-        const index = listings.findIndex(
-            v => v.external_id === vehicle.external_id
-        );
+            updated_at: wp.modified || null
+        }));
 
-        if (index !== -1) {
-            listings.splice(index, 1);
+        res.json(listings);
+
+    } catch (err) {
+        console.log("INVENTORY ERROR:", err.message);
+        res.status(500).json({ error: "failed to load inventory" });
+    }
+});
+
+/**
+ * WEBHOOK (REAL-TIME SINGLE LISTING SYNC)
+ */
+app.post("/webhook", async (req, res) => {
+
+    try {
+
+        const id = req.body.id;
+
+        if (!id) {
+            return res.status(400).json({ error: "missing listing id" });
         }
 
-        // INSERT CLEAN VERSION
-        listings.push(vehicle);
+        // FETCH FULL LISTING FROM WORDPRESS
+        const wpRes = await axios.get(
+            `https://auto42.co.za/wp-json/wp/v2/listing/${id}?_embed=1`
+        );
 
-        console.log("✅ Synced:", vehicle.title);
+        const wp = wpRes.data;
+
+        const vehicle = {
+            id: wp.id,
+            title: wp.title?.rendered || "",
+            slug: wp.slug || "",
+            link: wp.link || "",
+            status: wp.status || "",
+
+            image:
+                wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null,
+
+            price: wp.meta?.stm_car_price || null,
+            mileage: wp.meta?.stm_car_mileage || null,
+
+            synced_at: new Date()
+        };
+
+        console.log("SYNCED:", vehicle.title);
 
         res.json({
             success: true,
@@ -75,7 +92,7 @@ app.post("/webhook", async (req, res) => {
 
     } catch (err) {
 
-        console.log(err.message);
+        console.log("WEBHOOK ERROR:", err.message);
 
         res.status(500).json({
             error: "sync failed"
@@ -83,17 +100,11 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// START SERVER
+/**
+ * START SERVER
+ */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log("🚀 Server running on port", PORT);
-});
-
-app.get("/routes", (req, res) => {
-    res.json({
-        inventory: true,
-        webhook: true,
-        status: "ok"
-    });
 });
