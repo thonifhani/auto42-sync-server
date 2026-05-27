@@ -6,81 +6,55 @@ const app = express();
 app.use(express.json());
 
 /**
- * HEALTH CHECK
+ * ROOT TEST
  */
 app.get("/", (req, res) => {
     res.send("Auto42 Sync Server LIVE");
 });
 
 /**
- * INVENTORY (REAL WORDPRESS DATA ONLY)
- * Motors CPT: listings
+ * INVENTORY DEBUG (SAFE + FULL ERROR VISIBILITY)
+ * Purpose: identify why WordPress sync fails
  */
 app.get("/inventory", async (req, res) => {
 
     try {
 
-        // GET LISTINGS
-        const listingsRes = await axios.get(
-            "https://auto42.co.za/wp-json/wp/v2/listings?per_page=20&_embed=1"
-        );
+        const url = "https://auto42.co.za/wp-json/wp/v2/listings?per_page=1";
 
-        const listings = listingsRes.data;
+        console.log("FETCHING WORDPRESS:", url);
 
-        const result = await Promise.all(listings.map(async (wp) => {
+        const response = await axios.get(url);
 
-            // FEATURE IMAGE
-            let image =
-                wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null;
+        console.log("STATUS:", response.status);
 
-            // GALLERY (MEDIA ATTACHMENTS)
-            let gallery = [];
-
-            try {
-                const mediaRes = await axios.get(
-                    `https://auto42.co.za/wp-json/wp/v2/media?parent=${wp.id}`
-                );
-
-                gallery = mediaRes.data.map(m => m.source_url);
-
-            } catch (e) {
-                // ignore gallery errors
-            }
-
-            return {
-                id: wp.id,
-                title: wp.title?.rendered || "",
-                slug: wp.slug || "",
-                link: wp.link || "",
-                status: wp.status || "",
-
-                image,
-                gallery,
-
-                // NOTE: Motors meta NOT exposed in REST API
-                price: null,
-                mileage: null,
-                year: null,
-                make: null,
-                model: null,
-
-                updated_at: wp.modified || null
-            };
-        }));
-
-        res.json(result);
+        return res.json({
+            success: true,
+            endpoint: url,
+            count: Array.isArray(response.data) ? response.data.length : 0,
+            sample: response.data?.[0] || null
+        });
 
     } catch (err) {
-        console.log("INVENTORY ERROR:", err.message);
 
-        res.status(500).json({
-            error: "failed to load inventory"
+        console.log("========== WORDPRESS ERROR ==========");
+        console.log("STATUS:", err.response?.status);
+        console.log("DATA:", err.response?.data);
+        console.log("MESSAGE:", err.message);
+        console.log("====================================");
+
+        return res.status(500).json({
+            error: "failed to load inventory",
+            debug: {
+                status: err.response?.status || null,
+                message: err.message
+            }
         });
     }
 });
 
 /**
- * WEBHOOK (REAL-TIME SINGLE LISTING SYNC)
+ * WEBHOOK DEBUG (SAFE SINGLE LISTING FETCH)
  */
 app.post("/webhook", async (req, res) => {
 
@@ -92,44 +66,24 @@ app.post("/webhook", async (req, res) => {
             return res.status(400).json({ error: "missing id" });
         }
 
-        // GET SINGLE LISTING
-        const wpRes = await axios.get(
-            `https://auto42.co.za/wp-json/wp/v2/listings/${id}?_embed=1`
-        );
+        const url = `https://auto42.co.za/wp-json/wp/v2/listings/${id}`;
+
+        console.log("WEBHOOK FETCH:", url);
+
+        const wpRes = await axios.get(url);
 
         const wp = wpRes.data;
-
-        let image =
-            wp._embedded?.["wp:featuredmedia"]?.[0]?.source_url || null;
-
-        let gallery = [];
-
-        try {
-            const mediaRes = await axios.get(
-                `https://auto42.co.za/wp-json/wp/v2/media?parent=${id}`
-            );
-
-            gallery = mediaRes.data.map(m => m.source_url);
-
-        } catch (e) {}
 
         const vehicle = {
             id: wp.id,
             title: wp.title?.rendered || "",
-            slug: wp.slug || "",
             link: wp.link || "",
-
-            image,
-            gallery,
-
-            price: null,
-            mileage: null,
-            year: null,
-
-            synced_at: new Date()
+            slug: wp.slug || "",
+            status: wp.status || "",
+            updated_at: new Date()
         };
 
-        console.log("SYNCED:", vehicle.title);
+        console.log("SYNC OK:", vehicle.title);
 
         res.json({
             success: true,
@@ -141,7 +95,8 @@ app.post("/webhook", async (req, res) => {
         console.log("WEBHOOK ERROR:", err.message);
 
         res.status(500).json({
-            error: "sync failed"
+            error: "sync failed",
+            debug: err.response?.data || err.message
         });
     }
 });
